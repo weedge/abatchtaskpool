@@ -1,6 +1,13 @@
 # Async Batch Engine
 
-An asynchronous batch processing engine for Python.
+An asynchronous batch processing engine for Python and Go. It allows you to process a large number of tasks in batches asynchronously, improving performance by reducing the overhead of individual task processing. Increased throughput.
+
+Use Cases:
+- Data Migration(Change Data Capture)/Processing 
+- Batch Requests to API
+
+Request:
+- need process function support batch process
 
 ## Installation
 
