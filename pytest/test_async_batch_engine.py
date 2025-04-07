@@ -5,7 +5,7 @@ import asyncio
 from abatchtaskpool.async_batch_engine import AsyncBatchEngine
 
 """
-python -m unittest test/test_async_batch_engine.py
+python -m unittest pytest/test_async_batch_engine.py
 """
 
 

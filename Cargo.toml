@@ -1,5 +1,5 @@
 [package]
-name = "batch_engine"
+name = "abatchtaskpool"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,3 +9,11 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+[[example]]
+name = "example"
+path = "examples/example.rs"

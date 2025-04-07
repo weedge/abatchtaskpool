@@ -3,6 +3,15 @@
 version = 3
 
 [[package]]
+name = "abatchtaskpool"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -36,15 +45,6 @@ dependencies = [
  "object",
  "rustc-demangle",
  "windows-targets",
-]
-
-[[package]]
-name = "batch_engine"
-version = "0.1.0"
-dependencies = [
- "futures",
- "tokio",
- "uuid",
 ]
 
 [[package]]
