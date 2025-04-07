@@ -9,9 +9,10 @@ use uuid::Uuid;
 type ProcessingFunction =
     Arc<dyn Fn(Vec<String>) -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync>;
 
-// Represents a request with its data and a channel to send the result
+// Represents a request with its data, request ID, and a channel to send the result
 struct Request {
     data: String,
+    request_id: String,
     result_tx: tokio::sync::oneshot::Sender<String>,
 }
 
@@ -71,6 +72,10 @@ impl BatchWorker {
             match timeout(self.wait_timeout, request_rx_guard.recv()).await {
                 // Timeout occurred
                 Err(_) => {
+                    println!(
+                        "Worker {} timed out while waiting for requests.",
+                        self.worker_id
+                    );
                     break; // Exit collection loop, return any collected requests
                 }
                 // No timeout, result from recv()
@@ -78,10 +83,18 @@ impl BatchWorker {
                     match result {
                         // Request received successfully
                         Some(request) => {
+                            println!(
+                                "Worker {} received request: {}",
+                                self.worker_id, request.request_id
+                            );
                             requests.push(request);
                         }
                         // Channel closed
                         None => {
+                            println!(
+                                "Worker {} detected channel closed, exiting.",
+                                self.worker_id
+                            );
                             channel_closed = true;
                             break; // Exit collection loop
                         }
@@ -133,7 +146,7 @@ impl AsyncBatchEngine {
 
         let mut worker_tasks = Vec::new();
         for i in 0..num_workers {
-            let request_rx_clone = request_rx.clone();
+            let request_rx_clone: Arc<Mutex<mpsc::Receiver<Request>>> = request_rx.clone();
             let processing_function_clone = processing_function.clone();
             let mut worker = BatchWorker::new(
                 i,
@@ -174,10 +187,20 @@ impl AsyncBatchEngine {
     }
 
     // Adds a request to the engine
-    async fn add_request(&self, input_data: String) -> Result<String, String> {
+    // Adds a request to the engine and returns a receiver for the result
+    async fn add_request(
+        &self,
+        input_data: String,
+        request_id: Option<String>,
+    ) -> Result<tokio::sync::oneshot::Receiver<String>, String> {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel::<String>();
+        let final_request_id = match request_id {
+            Some(id) if !id.is_empty() => id,
+            _ => Uuid::new_v4().to_string(),
+        };
         let request = Request {
             data: input_data,
+            request_id: final_request_id,
             result_tx,
         };
 
@@ -185,7 +208,7 @@ impl AsyncBatchEngine {
             .send(request)
             .await
             .map_err(|e| e.to_string())?;
-        result_rx.await.map_err(|e| e.to_string())
+        Ok(result_rx)
     }
 }
 
@@ -203,13 +226,15 @@ async fn main() {
     let mut engine = AsyncBatchEngine::new(processing_function, 32, Duration::from_millis(50), 1);
     engine.start().await;
 
-    let result1 = engine.add_request("Data 1".to_string()).await;
-    let result2 = engine.add_request("Data 2".to_string()).await;
-    let result3 = engine.add_request("Data 3".to_string()).await;
+    // Add requests and get receivers
+    let rx1 = engine.add_request("Data 1".to_string(), None).await;
+    let rx2 = engine.add_request("Data 2".to_string(), None).await;
+    let rx3 = engine.add_request("Data 3".to_string(), None).await;
 
-    println!("Result 1: {:?}", result1);
-    println!("Result 2: {:?}", result2);
-    println!("Result 3: {:?}", result3);
+    // Await results from receivers
+    println!("Result 1: {:?}", rx1.unwrap().await);
+    println!("Result 2: {:?}", rx2.unwrap().await);
+    println!("Result 3: {:?}", rx3.unwrap().await);
 
     engine.stop().await;
     println!("Engine stopped.");
@@ -242,9 +267,13 @@ mod tests {
             AsyncBatchEngine::new(processing_function, 32, Duration::from_millis(50), 1);
         engine.start().await;
 
-        let result = engine.add_request("Test Data".to_string()).await;
+        let rx = engine.add_request("Test Data".to_string(), None).await;
+        assert!(rx.is_ok());
+        let result = rx.unwrap().await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Processed: Test Data");
+        // Wait a bit for processing to likely complete before checking counter
+        sleep(Duration::from_millis(60)).await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
 
         engine.stop().await;
@@ -259,14 +288,30 @@ mod tests {
             AsyncBatchEngine::new(processing_function, 2, Duration::from_millis(50), 1);
         engine.start().await;
 
-        let result1 = engine.add_request("Data 1".to_string()).await;
-        let result2 = engine.add_request("Data 2".to_string()).await;
-        let result3 = engine.add_request("Data 3".to_string()).await;
+        let rx1 = engine.add_request("Data 1".to_string(), None).await;
+        let rx2 = engine.add_request("Data 2".to_string(), None).await;
+        let rx3 = engine.add_request("Data 3".to_string(), None).await;
 
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
-        assert!(result3.is_ok());
+        assert!(rx1.is_ok());
+        assert!(rx2.is_ok());
+        assert!(rx3.is_ok());
+
+        // Await results
+        let res1 = rx1.unwrap().await;
+        let res2 = rx2.unwrap().await;
+        let res3 = rx3.unwrap().await;
+
+        assert!(res1.is_ok());
+        assert!(res2.is_ok());
+        assert!(res3.is_ok());
+
+        // Wait a bit for processing to likely complete before checking counter
+        sleep(Duration::from_millis(60)).await;
+        // The counter might be 2 or 3 depending on batching and timing.
+        // With batch size 2, requests 1&2 form a batch, request 3 forms another.
+        // So the processing function should be called twice.
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+
 
         engine.stop().await;
     }
@@ -295,9 +340,12 @@ mod tests {
             AsyncBatchEngine::new(processing_function, 2, Duration::from_millis(10), 1);
         engine.start().await;
 
-        let _ = engine.add_request("Data 1".to_string()).await;
-        sleep(Duration::from_millis(50)).await; // Wait for a while to see if any batch is processed
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let rx = engine.add_request("Data 1".to_string(), None).await;
+        assert!(rx.is_ok());
+        let _ = rx.unwrap().await; // Await the result
+
+        sleep(Duration::from_millis(50)).await; // Wait for timeout processing
+        assert_eq!(counter.load(Ordering::SeqCst), 1); // Should be processed
 
         engine.stop().await;
     }
@@ -311,12 +359,29 @@ mod tests {
             AsyncBatchEngine::new(processing_function, 2, Duration::from_millis(10), 2);
         engine.start().await;
 
-        let _ = engine.add_request("Data 1".to_string()).await;
-        let _ = engine.add_request("Data 2".to_string()).await;
-        let _ = engine.add_request("Data 3".to_string()).await;
-        let _ = engine.add_request("Data 4".to_string()).await;
-        sleep(Duration::from_millis(50)).await; // Wait for a while to see if any batch is processed
+        let rx1 = engine.add_request("Data 1".to_string(), None).await;
+        let rx2 = engine.add_request("Data 2".to_string(), None).await;
+        let rx3 = engine.add_request("Data 3".to_string(), None).await;
+        let rx4 = engine.add_request("Data 4".to_string(), None).await;
+
+        assert!(rx1.is_ok());
+        assert!(rx2.is_ok());
+        assert!(rx3.is_ok());
+        assert!(rx4.is_ok());
+
+        // Await all results
+        let _ = tokio::join!(
+            rx1.unwrap(),
+            rx2.unwrap(),
+            rx3.unwrap(),
+            rx4.unwrap()
+        );
+
+        sleep(Duration::from_millis(60)).await; // Wait for processing
+        // With batch size 2, requests 1&2 form a batch, 3&4 form another.
+        // Processing function called twice.
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+
 
         engine.stop().await;
     }
@@ -333,8 +398,11 @@ mod tests {
             AsyncBatchEngine::new(processing_function, 2, Duration::from_millis(10), 1);
         engine.start().await;
 
-        let result = engine.add_request("Data 1".to_string()).await;
-        assert!(result.is_err());
+        let rx = engine.add_request("Data 1".to_string(), None).await;
+        assert!(rx.is_ok());
+        let result = rx.unwrap().await;
+        // The error now comes from the receiver await, not the add_request call itself
+        assert!(result.is_err()); // Error because the processing function panicked
 
         engine.stop().await;
     }
