@@ -6,7 +6,7 @@ Use Cases:
 - Data Migration(Change Data Capture)/Processing 
 - Batch Requests to API
 
-Request:
+Require:
 - need process function support batch process
 
 ## Installation
