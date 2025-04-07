@@ -9,6 +9,7 @@ pip install abatchtaskpool
 ```
 
 ## Usage
+### Python
 ```python
 from typing import Any, List
 import asyncio
@@ -46,4 +47,50 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
+```
+
+### Golang
+```go
+package main
+
+import (
+	"fmt"
+	"math/rand"
+	"time"
+	"abatchtaskpool"
+)
+
+func ExampleProcessingFunction(inputs []interface{}) ([]interface{}, error) {
+	sTime := rand.Intn(3) + 1
+	fmt.Printf("Processing batch: %v sleeping for %d seconds\n", inputs, sTime)
+	time.Sleep(time.Duration(sTime) * time.Second)
+	results := make([]interface{}, len(inputs))
+	for i, item := range inputs {
+		results[i] = fmt.Sprintf("Processed_%v", item)
+	}
+	return results, nil
+}
+
+func main() {
+	engine := abatchtaskpool.NewAsyncBatchEngine(ExampleProcessingFunction, 3, 50*time.Millisecond, 4)
+	engine.Start()
+
+	numTasks := 10
+	results := make([]chan interface{}, numTasks)
+	for i := 0; i < numTasks; i++ {
+		resultChan, _ := engine.AddRequest(fmt.Sprintf("task_%d", i), fmt.Sprintf("req_%d", i))
+		results[i] = resultChan
+	}
+
+	for i, resultChan := range results {
+		result := <-resultChan
+		if resultStr, ok := result.(string); ok {
+			fmt.Printf("Result: %s\n", resultStr)
+		} else {
+			fmt.Printf("Unexpected result type: %T\n", result)
+		}
+	}
+
+	engine.Stop()
+}
 ```
